@@ -201,7 +201,7 @@ print(
 
 print("\nLoading pyannote diarization model...")
 
-HF_TOKEN = "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"
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 diarization_pipeline = None
 diarization_available = False
