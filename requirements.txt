@@ -1,0 +1,5 @@
+google-genai
+faster-whisper
+rapidfuzz
+jellyfish
+python-dotenv
