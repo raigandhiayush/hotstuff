@@ -3,3 +3,16 @@ faster-whisper
 rapidfuzz
 jellyfish
 python-dotenv
+gradio
+transformers
+peft
+pyannote.audio
+soundfile
+scipy
+pydantic
+datasets
+accelerate
+librosa
+evaluate
+jiwer
+torchao>=0.16.0

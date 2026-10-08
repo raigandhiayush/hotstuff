@@ -1,129 +1,33 @@
-# ============================================================
-# STAGE 3 — AI MEETING ASSISTANT
-# Gemini 3.5 Flash-Lite
-# ============================================================
-
-!pip install -q -U google-genai pydantic
-
 import os
 import json
 import time
+import argparse
 from typing import Optional
 
 from google import genai
 from pydantic import BaseModel, Field
 
-print("=" * 70)
-print("STAGE 3 — AI MEETING ASSISTANT")
-print("=" * 70)
-
-
 # ============================================================
-# 1. CONFIGURATION
-# ============================================================
-
-MODEL_NAME = "gemini-3.5-flash-lite"
-INPUT_FILE = "/content/refined_transcript.txt"
-FINAL_JSON_FILE = "/content/meeting_record.json"
-FINAL_MD_FILE = "/content/meeting_record.md"
-
-print("\n" + "=" * 70)
-print("CONFIGURATION")
-print("=" * 70)
-print(f"[INFO] Model           : {MODEL_NAME}")
-print("[INFO] Thinking        : minimal")
-print(f"[INFO] Input           : {INPUT_FILE}")
-print(f"[INFO] Final JSON      : {FINAL_JSON_FILE}")
-print(f"[INFO] Final Markdown  : {FINAL_MD_FILE}")
-
-
-# ============================================================
-# 2. GEMINI API KEY
-# ============================================================
-
-print("\n" + "=" * 70)
-print("CHECKING GEMINI API KEY")
-print("=" * 70)
-
-try:
-    from google.colab import userdata
-    GEMINI_API_KEY = userdata.get("GEMINI_API_KEY")
-except Exception:
-    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY not found. Add it to Google Colab Secrets "
-        "with the name GEMINI_API_KEY and enable notebook access."
-    )
-
-print("[OK] Gemini API key found.")
-
-
-# ============================================================
-# 3. INITIALIZE GEMINI
-# ============================================================
-
-print("\n" + "=" * 70)
-print("INITIALIZING GEMINI")
-print("=" * 70)
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-print("[OK] Gemini client initialized.")
-
-
-# ============================================================
-# 4. LOAD TRANSCRIPT
-# ============================================================
-
-print("\n" + "=" * 70)
-print("LOADING REFINED TRANSCRIPT")
-print("=" * 70)
-
-if not os.path.exists(INPUT_FILE):
-    raise FileNotFoundError(f"Transcript not found: {INPUT_FILE}")
-
-with open(INPUT_FILE, "r", encoding="utf-8") as f:
-    transcript = f.read()
-
-print("[OK] Transcript loaded.")
-print(f"[INFO] Characters : {len(transcript):,}")
-print(f"[INFO] Words      : {len(transcript.split()):,}")
-
-
-# ============================================================
-# 5. OUTPUT SCHEMAS
+# OUTPUT SCHEMAS
 # ============================================================
 
 class DiscussionPoint(BaseModel):
     topic: str = Field(description="The main topic discussed.")
     discussion: str = Field(description="Concise factual description of what was discussed.")
 
-
 class Decision(BaseModel):
     decision: str = Field(description="A decision explicitly agreed upon during the meeting.")
-
 
 class ActionItem(BaseModel):
     task: str = Field(description="An explicitly assigned, committed, or agreed task.")
     owner: Optional[str] = Field(default=None, description="Person explicitly assigned to the task. Null if not stated.")
     deadline: Optional[str] = Field(default=None, description="Explicitly stated deadline. Null if not stated.")
 
-
 class MeetingRecord(BaseModel):
     summary: str = Field(description="Concise summary of the entire meeting.")
     minutes: list[DiscussionPoint] = Field(description="Organized meeting minutes.")
     decisions: list[Decision] = Field(description="Explicit decisions made during the meeting.")
     action_items: list[ActionItem] = Field(description="Explicit action items from the meeting.")
-
-
-print("[OK] Output schema created.")
-
-
-# ============================================================
-# 6. STAGE 3 PROMPT
-# ============================================================
 
 SYSTEM_PROMPT = """
 You are Stage 3 of an AI meeting assistant.
@@ -151,35 +55,25 @@ The minutes should contain the important topics discussed and must not invent or
 The final meeting record must faithfully represent the transcript.
 """
 
+def process_stage3(input_file, final_json_file, final_md_file):
+    MODEL_NAME = "gemini-3.5-flash-lite"
 
-# ============================================================
-# 7. CREATE REQUEST
-# ============================================================
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY environment variable not found.")
 
-final_prompt = f"""
-{SYSTEM_PROMPT}
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-MEETING TRANSCRIPT
-==================
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"Transcript not found: {input_file}")
 
-{transcript}
+    with open(input_file, "r", encoding="utf-8") as f:
+        transcript = f.read()
 
-END MEETING TRANSCRIPT
-"""
+    final_prompt = f"{SYSTEM_PROMPT}\n\nMEETING TRANSCRIPT\n==================\n\n{transcript}\n\nEND MEETING TRANSCRIPT\n"
 
-
-# ============================================================
-# 8. GEMINI REQUEST
-# ============================================================
-
-print("\n" + "=" * 70)
-print("SENDING TRANSCRIPT TO GEMINI")
-print("=" * 70)
-
-schema = MeetingRecord.model_json_schema()
-start_time = time.time()
-
-try:
+    schema = MeetingRecord.model_json_schema()
+    
     interaction = client.interactions.create(
         model=MODEL_NAME,
         input=final_prompt,
@@ -190,137 +84,53 @@ try:
             "schema": schema
         }
     )
-except Exception as e:
-    print(f"[ERROR] Gemini request failed: {type(e).__name__}: {e}")
-    raise
 
-elapsed = time.time() - start_time
+    output_text = interaction.output_text
+    if not output_text:
+        raise RuntimeError("Gemini returned empty output.")
 
-print("[OK] Gemini response received.")
-print(f"[INFO] Inference time: {elapsed:.2f} seconds")
-
-
-# ============================================================
-# 9. VALIDATE OUTPUT
-# ============================================================
-
-print("\n" + "=" * 70)
-print("VALIDATING GEMINI OUTPUT")
-print("=" * 70)
-
-output_text = interaction.output_text
-
-if not output_text:
-    raise RuntimeError("Gemini returned empty output.")
-
-print(f"[INFO] Output characters: {len(output_text):,}")
-
-try:
     meeting_record = MeetingRecord.model_validate_json(output_text)
-except Exception as e:
-    print("[ERROR] Output validation failed.")
-    print(output_text)
-    raise e
+    final_dict = meeting_record.model_dump()
 
-print("[OK] JSON structure validated.")
-print("[OK] Pydantic validation successful.")
-print(f"[INFO] Minutes      : {len(meeting_record.minutes)}")
-print(f"[INFO] Decisions    : {len(meeting_record.decisions)}")
-print(f"[INFO] Action items : {len(meeting_record.action_items)}")
+    with open(final_json_file, "w", encoding="utf-8") as f:
+        json.dump(final_dict, f, indent=2, ensure_ascii=False)
 
+    md = ["# Meeting Record", "", "## Summary", "", final_dict["summary"], ""]
+    md.extend(["## Minutes", ""])
 
-# ============================================================
-# 10. SAVE JSON
-# ============================================================
+    if final_dict["minutes"]:
+        for i, point in enumerate(final_dict["minutes"], 1):
+            md.extend([f"### {i}. {point['topic']}", "", point["discussion"], ""])
+    else:
+        md.extend(["No discussion points identified.", ""])
 
-print("\n" + "=" * 70)
-print("SAVING JSON")
-print("=" * 70)
+    md.extend(["## Decisions", ""])
+    if final_dict["decisions"]:
+        for i, decision in enumerate(final_dict["decisions"], 1):
+            md.append(f"{i}. {decision['decision']}")
+    else:
+        md.append("No explicit decisions identified.")
+    md.append("")
 
-final_dict = meeting_record.model_dump()
+    md.extend(["## Action Items", ""])
+    if final_dict["action_items"]:
+        for i, action in enumerate(final_dict["action_items"], 1):
+            owner = action["owner"] if action["owner"] else "Not specified"
+            deadline = action["deadline"] if action["deadline"] else "Not specified"
+            md.extend([f"### {i}. {action['task']}", "", f"- **Owner:** {owner}", f"- **Deadline:** {deadline}", ""])
+    else:
+        md.extend(["No explicit action items identified.", ""])
 
-with open(FINAL_JSON_FILE, "w", encoding="utf-8") as f:
-    json.dump(final_dict, f, indent=2, ensure_ascii=False)
+    markdown_output = "\n".join(md)
+    with open(final_md_file, "w", encoding="utf-8") as f:
+        f.write(markdown_output)
 
-print(f"[OK] Saved: {FINAL_JSON_FILE}")
+    return markdown_output, final_dict
 
-
-# ============================================================
-# 11. CREATE MARKDOWN
-# ============================================================
-
-print("\n" + "=" * 70)
-print("CREATING MARKDOWN")
-print("=" * 70)
-
-md = ["# Meeting Record", "", "## Summary", "", final_dict["summary"], ""]
-
-md.extend(["## Minutes", ""])
-
-if final_dict["minutes"]:
-    for i, point in enumerate(final_dict["minutes"], 1):
-        md.extend([
-            f"### {i}. {point['topic']}",
-            "",
-            point["discussion"],
-            ""
-        ])
-else:
-    md.extend(["No discussion points identified.", ""])
-
-md.extend(["## Decisions", ""])
-
-if final_dict["decisions"]:
-    for i, decision in enumerate(final_dict["decisions"], 1):
-        md.append(f"{i}. {decision['decision']}")
-else:
-    md.append("No explicit decisions identified.")
-
-md.append("")
-
-md.extend(["## Action Items", ""])
-
-if final_dict["action_items"]:
-    for i, action in enumerate(final_dict["action_items"], 1):
-        owner = action["owner"] if action["owner"] else "Not specified"
-        deadline = action["deadline"] if action["deadline"] else "Not specified"
-
-        md.extend([
-            f"### {i}. {action['task']}",
-            "",
-            f"- **Owner:** {owner}",
-            f"- **Deadline:** {deadline}",
-            ""
-        ])
-else:
-    md.extend(["No explicit action items identified.", ""])
-
-markdown_output = "\n".join(md)
-
-with open(FINAL_MD_FILE, "w", encoding="utf-8") as f:
-    f.write(markdown_output)
-
-print(f"[OK] Saved: {FINAL_MD_FILE}")
-
-
-# ============================================================
-# 12. DISPLAY FINAL RESULT
-# ============================================================
-
-print("\n" + "=" * 70)
-print("FINAL MEETING RECORD")
-print("=" * 70)
-print()
-print(markdown_output)
-
-
-# ============================================================
-# 13. COMPLETE
-# ============================================================
-
-print("\n" + "=" * 70)
-print("STAGE 3 COMPLETE")
-print("=" * 70)
-print("[OK] Meeting record generated successfully.")
-print(f"[OK] JSON     : {FINAL_JSON_FILE}")
-print(f"[OK] Markdown : {FINAL_MD_FILE}")
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--json", required=True)
+    parser.add_argument("--md", required=True)
+    args = parser.parse_args()
+    process_stage3(args.input, args.json, args.md)
