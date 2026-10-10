@@ -3,7 +3,7 @@ import gradio as gr
 import shutil
 from pathlib import Path
 from stage1 import transcribe_stage1
-from meeting_refinement import refine_transcript
+from stage2 import refine_transcript
 from stage3 import process_stage3
 
 def process_meeting(audio_file):
