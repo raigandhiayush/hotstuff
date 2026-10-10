@@ -1,114 +1,153 @@
 # AI Meeting Assistant Pipeline
 
-Welcome to the AI Meeting Assistant! This project provides an end-to-end pipeline that takes an audio recording of a meeting and converts it into a clean, refined transcript along with structured meeting minutes and action items.
+The **AI Meeting Assistant** converts meeting recordings into readable transcripts, meeting summaries, key decisions, and action items. It combines automatic speech recognition (ASR), speaker diarization, and large language models (LLMs) in a sequential pipeline, with a Gradio web interface for uploading audio and viewing the results.
 
-## Brief Overall Architecture
+## Architecture Overview
 
-The pipeline is designed as a multi-stage sequential architecture that leverages state-of-the-art AI models:
+1. **Audio input:** Upload a `.wav` or `.mp3` meeting recording through the web interface.
+2. **Stage 1 — Transcription and diarization:** Whisper with a custom LoRA adapter transcribes the audio, while Pyannote identifies speaker segments.
+3. **Stage 2 — Transcript refinement:** Google Gemini cleans up the raw transcript while preserving its meaning and speaker labels.
+4. **Stage 3 — Meeting information extraction:** Gemini generates an executive summary, key decisions, and action items from the refined transcript.
+5. **Web interface:** `main.py` orchestrates the stages and displays the results in a Gradio dashboard.
 
-1. **Audio Input**: An audio file (`.wav`, `.mp3`) is uploaded via the web interface.
-2. **Stage 1 (Audio processing)**: The audio is passed through an Automatic Speech Recognition (ASR) model (Whisper + LoRA) and a speaker diarization model (Pyannote).
-3. **Stage 2 (Text Refinement)**: The raw, slightly messy text is passed to an LLM (Google Gemini) to clean up stutters and fix grammatical mistakes.
-4. **Stage 3 (Information Extraction)**: The cleaned text is passed to the LLM again to extract meeting minutes, summaries, and action items.
-5. **Web UI**: Everything is orchestrated by a Gradio dashboard (`main.py`) which displays the results back to the user.
+## Setup and Running (Google Colab)
 
-\---
+Google Colab with a GPU runtime is recommended for efficient audio processing.
 
-## Complete Setup \& Running Steps (Google Colab)
+### 1. Configure the Colab environment
 
-To run this project efficiently, it is highly recommended to use Google Colab with a GPU.
+1. Open a new Google Colab notebook.
+2. Select **Runtime → Change runtime type → T4 GPU** (or another available GPU runtime).
+3. Open the **Secrets** tab in the left sidebar and add these secrets. Enable **Notebook access** for both:
+   - `HF_TOKEN` — your Hugging Face access token. Ensure you have accepted the required terms for the Pyannote model on Hugging Face.
+   - `GEMINI_API_KEY` — your Google Gemini API key.
 
-### 1\. Configure the Colab Environment
+### 2. Upload and extract the project
 
-* Open a new Google Colab notebook.
-* Go to **Runtime > Change runtime type** and select **T4 GPU**.
-* Open the **Secrets** tab on the left sidebar. Add two secrets and grant them "Notebook access":
-
-  * `HF\_TOKEN`: Your Hugging Face API token (Make sure you have accepted the Pyannote terms on HuggingFace).
-  * `GEMINI\_API\_KEY`: Your Google Gemini API key.
-
-### 2\. Upload and Extract Files
-
-Upload this zip file to your Colab workspace and extract it:
+Upload `hotstuff_colab.zip` to the Colab session, then run:
 
 ```bash
-!unzip -q -o hotstuff\_colab.zip -d hotstuff\_project
+!unzip -q -o hotstuff_colab.zip -d hotstuff_project
 ```
 
-### 3\. Install Dependencies
+### 3. Install dependencies
 
-Install the required packages. (Note: Colab's default PyTorch is used to ensure GPU compatibility).
+Install the packages listed in the project's requirements file:
 
 ```bash
-!pip install -r hotstuff\_project/requirements.txt
+!pip install -r hotstuff_project/requirements.txt
 ```
 
-### 4\. Run the Pipeline
+The commands above leave Colab's existing PyTorch installation in place unless a dependency explicitly changes it. If GPU-related package conflicts occur, check the installed PyTorch and CUDA versions before reinstalling packages.
 
-Execute the main script. The script will automatically pull your secrets and launch a public web link.
+### 4. Launch the pipeline
+
+Load the secrets into environment variables and start the application:
 
 ```python
 import os
 from google.colab import userdata
 
-os.environ\["HF\_TOKEN"] = userdata.get('HF\_TOKEN')
-os.environ\["GEMINI\_API\_KEY"] = userdata.get('GEMINI\_API\_KEY')
+os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+os.environ["GEMINI_API_KEY"] = userdata.get("GEMINI_API_KEY")
 
-!python hotstuff\_project/main.py
+!python hotstuff_project/main.py
 ```
 
-Click the `gradio.live` link printed in the console to open the dashboard!
+When the script starts successfully, it prints a Gradio URL ending in `gradio.live`. Open that link to access the dashboard.
 
-\---
+> **Security note:** Keep API keys in Colab Secrets. Do not hard-code them into the source code or commit them to Git.
 
-## Pipeline Stages in Detail
+## Pipeline Stages
 
-### Stage 1: Transcription and Diarization (`stage1.py`)
+### Stage 1: Transcription and Speaker Diarization — `stage1.py`
 
-**Goal:** Convert spoken audio into raw text and identify who is speaking.
+**Purpose:** Convert meeting audio into text and identify the speakers associated with the audio segments.
 
-* **Speaker Diarization:** Uses `pyannote/speaker-diarization-community-1` to segment the audio by speaker (e.g., SPEAKER\_00, SPEAKER\_01).
-* **Automatic Speech Recognition (ASR):** Uses OpenAI's `whisper-small` model, enhanced with a custom fine-tuned LoRA adapter (located in `whisper-small-lora-backup/`) to accurately transcribe the audio segments into text.
-* Fine-Tuning Method — Whisper + LoRA
-* Base model: Pre-trained Whisper-small, fine-tuned on the AMI Meeting Corpus for meeting-specific English speech recognition.
-* Parameter-efficient fine-tuning: Applied LoRA to the Whisper query (q\_proj) and value (v\_proj) projection layers, using rank r=8 and α=16.
-* Training setup: Used 10,000 AMI training samples + 1,000 validation samples, with learning rate 1e-4, batch size 8, gradient accumulation 2, and 400 training steps.
-* Objective: Optimize transcription performance on meeting-style speech while training only a small number of additional LoRA parameters instead of updating the entire Whisper model.
-* **Output:** A raw transcript file (`\*\_raw.txt`).
+- **Speaker diarization:** Uses `pyannote/speaker-diarization-community-1` to divide the recording into speaker-labelled segments, such as `SPEAKER_00` and `SPEAKER_01`.
+- **Automatic speech recognition:** Uses the `whisper-small` model with the custom LoRA adapter in `whisper-small-lora-backup/` to transcribe the audio.
+- **Output:** A raw transcript saved as `*_raw.txt`.
 
-### Stage 2: Transcript Refinement (`meeting\_refinement.py`)
+#### Whisper + LoRA fine-tuning details
 
-**Goal:** Clean up the raw transcript to make it readable.
+The Whisper-small model was adapted for meeting-style English speech using the AMI Meeting Corpus.
 
-* **Process:** The raw text often contains "ums", "ahs", stuttering, or minor transcription errors. This stage passes the raw text to the Google Gemini API.
-* **Prompt Engineering:** Gemini is instructed to fix grammar and remove filler words while strictly preserving the original intent, context, and speaker tags.
-* **Output:** A beautifully formatted, readable transcript (`\*\_refined.txt`).
+| Setting | Value |
+|---|---|
+| Base model | Whisper-small |
+| Training data | 10,000 AMI training samples and 1,000 validation samples |
+| LoRA target modules | `q_proj` and `v_proj` |
+| LoRA rank (`r`) | 8 |
+| LoRA alpha (`α`) | 16 |
+| Learning rate | `1e-4` |
+| Batch size | 8 |
+| Gradient accumulation | 2 steps |
+| Training steps | 400 |
 
-### Stage 3: Meeting Minutes \& Action Items (`stage3.py`)
+LoRA updates a comparatively small set of adapter parameters rather than fine-tuning all of Whisper's parameters. The aim is to improve transcription of meeting-style speech.
 
-**Goal:** Extract actionable intelligence from the meeting.
+### Stage 2: Transcript Refinement — `meeting_refinement.py`
 
-* **Process:** The *refined* transcript is sent to the Gemini API in chunks.
-* Several chunks are sent to Gemini API with overlap with previous window to preserve context.
-* Then finally outputs of all such calls is again fed to Gemini API to furnish final ouputs.
-* **Output Generation:** The LLM generates a structured summary consisting of:
+**Purpose:** Make the raw transcript easier to read while preserving what was said.
 
-  * Executive Summary
-  * Key Decisions
-  * Action Items (who needs to do what)
-* **Output:** A structured Markdown file (`\*\_record.md`) and a JSON record (`\*\_record.json`) for potential database integration.
+The raw transcript may contain filler words, repetitions, grammatical errors, or transcription mistakes. This stage sends the text to the Google Gemini API with instructions to:
 
-\---
+- Correct grammar and punctuation.
+- Remove unnecessary filler words and stutters where appropriate.
+- Preserve the original meaning, context, and speaker tags.
+- Avoid inventing information or changing the speakers' intent.
 
-## Overall Integration Process (`main.py`)
+**Output:** A refined transcript saved as `*_refined.txt`.
 
-The `main.py` script acts as the orchestrator for the entire pipeline using **Gradio**.
+### Stage 3: Meeting Minutes and Action Items — `stage3.py`
 
-When a user uploads a file to the web UI:
+**Purpose:** Extract useful meeting information from the refined transcript.
 
-1. `main.py` saves the audio to a temporary output folder.
-2. It triggers `transcribe\_stage1()`. It waits for the raw `.txt` file to be generated.
-3. It immediately reads that raw text and passes it to `refine\_transcript()`.
-4. It takes the returned refined text, saves it, and passes it to `process\_stage3()`.
-5. Once all stages complete, `main.py` gathers the raw text, refined text, and markdown summary, and simultaneously updates the Gradio Web UI to display everything to the user in a clean, three-column layout.
+The transcript is divided into chunks and sent to Gemini. The chunking process uses overlapping context to help preserve information that spans chunk boundaries. The intermediate outputs are then combined and sent through a final Gemini call to produce the consolidated result.
 
+The output is intended to include:
+
+- **Executive summary** — a concise overview of the meeting.
+- **Key decisions** — decisions made during the discussion.
+- **Action items** — tasks and, where identifiable, the people responsible for them.
+
+**Outputs:**
+
+- `*_record.md` — structured meeting record in Markdown.
+- `*_record.json` — structured meeting record in JSON for possible downstream integration.
+
+## Application Integration — `main.py`
+
+`main.py` coordinates the pipeline and provides the Gradio interface. When a user uploads an audio file, it:
+
+1. Saves the uploaded audio to the configured output or temporary location.
+2. Calls `transcribe_stage1()` and waits for the raw transcript.
+3. Reads the raw transcript and passes it to `refine_transcript()`.
+4. Saves the refined transcript and passes it to `process_stage3()`.
+5. Collects the raw transcript, refined transcript, and meeting record.
+6. Displays the results in a three-column Gradio layout.
+
+## Expected Outputs
+
+For a processed recording, the pipeline produces the following files (exact names depend on the uploaded audio filename and the implementation):
+
+| Output | Description |
+|---|---|
+| `*_raw.txt` | Transcript generated by Stage 1 |
+| `*_refined.txt` | Cleaned transcript generated by Stage 2 |
+| `*_record.md` | Meeting summary, decisions, and action items in Markdown |
+| `*_record.json` | Structured meeting record in JSON |
+
+## Troubleshooting
+
+- **Missing Hugging Face credentials:** Confirm that `HF_TOKEN` exists in Colab Secrets and that Notebook access is enabled.
+- **Pyannote access errors:** Confirm that you have accepted the model's required terms on Hugging Face and that your token has access.
+- **Gemini authentication errors:** Check that `GEMINI_API_KEY` is correct and available in the notebook environment.
+- **GPU not being used:** Confirm that a GPU runtime is selected under **Runtime → Change runtime type**. A GPU runtime does not guarantee that every pipeline component will use the GPU.
+- **Dependency conflicts:** Review the installed package versions and the versions required by `requirements.txt` before changing Colab's preinstalled PyTorch/CUDA packages.
+- **Gradio link not appearing:** Check the console for startup errors and ensure `main.py` reaches the Gradio launch step.
+
+## Notes
+
+- Keep API keys and tokens out of source control.
+- The quality of the transcript and extracted action items depends on audio quality, diarization accuracy, and model outputs. Review the generated record before relying on it as an official meeting record.
